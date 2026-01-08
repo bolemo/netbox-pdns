@@ -121,6 +121,22 @@ class Settings(BaseSettings):
         default="localhost",
         description="The server identifier used when constructing PowerDNS API requests",
     )
+    pdns_zone_kind: str = Field(
+        default="Native",
+        description="Zone kind for PowerDNS zones (Master, Slave, or Native)",
+    )
+
+    @field_validator("pdns_zone_kind")
+    @classmethod
+    def validate_pdns_zone_kind(cls, v: str) -> str:
+        """Validate PowerDNS zone kind."""
+        valid_kinds = {"Master", "Slave", "Native"}
+    if v not in valid_kinds:
+            raise ValidationError(
+                f"Invalid zone kind '{v}'. Must be one of: {', '.join(valid_kinds)}"
+            )
+        return v
+
     mqtt_enabled: bool = Field(
         default=False,
         description="Enable MQTT subscription for zone update notifications",
