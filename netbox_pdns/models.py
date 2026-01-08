@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     def validate_pdns_zone_kind(cls, v: str) -> str:
         """Validate PowerDNS zone kind."""
         valid_kinds = {"Master", "Slave", "Native"}
-    if v not in valid_kinds:
+        if v not in valid_kinds:
             raise ValidationError(
                 f"Invalid zone kind '{v}'. Must be one of: {', '.join(valid_kinds)}"
             )
