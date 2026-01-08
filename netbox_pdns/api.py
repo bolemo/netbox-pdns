@@ -326,7 +326,7 @@ class NetboxPDNS:
             serial=nb_zone.soa_serial,
             rrsets=pdns_rrsets,
             soa_edit_api="",
-            kind="Native",
+            kind=self.config.pdns_zone_kind,
         )
 
         def _create_pdns_zone() -> None:
