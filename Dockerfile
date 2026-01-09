@@ -29,4 +29,4 @@ COPY --from=builder /app/.venv /app/.venv
 
 # Run the application
 EXPOSE 8000
-CMD ["/app/.venv/bin/netbox-pdns"]
+CMD ["/app/.venv/bin/netbox-pdns", "--host", "0.0.0.0"]

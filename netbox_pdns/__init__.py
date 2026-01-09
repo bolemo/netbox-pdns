@@ -139,14 +139,28 @@ def create_app() -> FastAPI:
             mqtt_service.stop()
 
     def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
-        """Verify HMAC webhook signature"""
+        """Verify NetBox webhook HMAC signature (SHA256 / SHA512, retro-compatible)"""
         if not signature or not secret:
             return False
         try:
-            # Remove 'sha256=' prefix if present
+            signature = signature.strip().lower()
+            # Accept legacy prefixes
             if signature.startswith("sha256="):
-                signature = signature[7:]
-            expected_signature = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+                signature = signature[len("sha256="):]
+            elif signature.startswith("sha512="):
+                signature = signature[len("sha512="):]
+            # Select hash algorithm by signature length
+            if len(signature) == 64:
+                hash_fn = hashlib.sha256
+            elif len(signature) == 128:
+                hash_fn = hashlib.sha512
+            else:
+                return False  # unknown / invalid signature format
+            expected_signature = hmac.new(
+                secret.encode(),
+                payload,
+                hash_fn,
+            ).hexdigest()
             return secrets.compare_digest(expected_signature, signature)
         except Exception:
             return False
@@ -162,44 +176,64 @@ def create_app() -> FastAPI:
             )
 
     async def verify_webhook_and_parse(request: Request) -> tuple[NetboxWebhook, str]:
-        """Verify webhook authentication and parse data in one step"""
-        # First verify API key
+        """
+        Verify webhook authentication and parse data in one step.
+        Supports both:
+        - minimal format: {"id": ..., "name": ...}
+        - full NetBox payload: {"event": ..., "data": {"id": ..., "name": ...}, ...}
+        """
+        # Verify API key
         api_key_value = request.headers.get("x-netbox-pdns-api-key")
         if not api_key_value or not secrets.compare_digest(api_key_value, api.config.api_key):
             raise HTTPException(
                 status_code=HTTP_401_UNAUTHORIZED, detail="Could not validate API key"
             )
 
-        # Get raw body for both signature verification and parsing
+        # Get raw body
         body = await request.body()
 
-        # If webhook secret is configured, verify HMAC signature
+        # Verify HMAC signature if configured
         if api.config.webhook_secret:
-            signature = request.headers.get("x-hub-signature-256") or request.headers.get(
-                "x-signature-256"
+            signature = (
+                request.headers.get("x-hook-signature")
+                or request.headers.get("x-hub-signature-256")
+                or request.headers.get("x-signature-256")
             )
             if not signature:
                 raise HTTPException(
                     status_code=HTTP_401_UNAUTHORIZED,
                     detail="HMAC signature required when webhook secret is configured",
                 )
-
             if not verify_webhook_signature(body, signature, api.config.webhook_secret):
                 raise HTTPException(
                     status_code=HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature"
                 )
 
-        # Parse JSON body into NetboxWebhook model
+        # Parse JSON
         try:
             data_dict = json.loads(body.decode("utf-8"))
-            webhook_data = NetboxWebhook(**data_dict)
-            return webhook_data, api_key_value
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=400, detail="Invalid JSON in request body") from e
+
+        # Retro-compatible: extract payload for NetboxWebhook
+        if "id" in data_dict and "name" in data_dict:
+            # Minimal format
+            webhook_payload = data_dict
+        elif "data" in data_dict and isinstance(data_dict["data"], dict):
+            # Full NetBox webhook format
+            webhook_payload = data_dict["data"]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid webhook data: missing required fields 'id' and 'name'"
+            )
+
+        # Validate with Pydantic model
+        try:
+            webhook_data = NetboxWebhook(**webhook_payload)
+            return webhook_data, api_key_value
         except ValidationError as e:
             raise HTTPException(status_code=400, detail=f"Invalid webhook data: {e}") from e
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing webhook data: {e}") from e
 
     # Initialize rate limiter
     limiter = Limiter(key_func=get_remote_address)
